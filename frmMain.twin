@@ -1,0 +1,366 @@
+[Description("")]
+[FormDesignerId("D0C6777B-A8D8-44D4-BDC9-408FB80DB6C8")]
+[PredeclaredId]
+Class Form1
+
+    Private appPath As String
+    Private dataPath As String
+    Private imgPath As String
+    Private fso As New FileSystemObject
+    
+    Dim itm As LvwListItem
+    
+    
+    Sub New()
+    End Sub
+    
+    Private Sub btnAddItem_Click()
+        
+        Dim itemName As String
+        
+        AskForItemName:
+        itemName = InputBox("Enter a name for the item:", "Add Item")
+        
+        If fso.FileExists(dataPath & itemName & ".txt") Then
+            MsgBox("An item already exists with that name ('" & itemName & "')", vbExclamation, "Unable to create item")
+            GoTo AskForItemName
+        End If
+        
+        ' create a text file that will have the name of the image
+        With fso.CreateTextFile(dataPath & itemName & ".txt")
+            .WriteLine("Item ImageName: NoImage")
+            .Close()
+        End With
+        
+        lvItems.ListItems.Add lvItems.ListItems.Count, , itemName, "NoImage"
+        
+        lvItems.Refresh()
+        
+    End Sub
+    
+    Private Sub Form_Load()
+        
+        appPath = App.Path
+        dataPath = appPath & "\data\"
+        imgPath = appPath & "\data\images\"
+        
+        ' add the image used when a new item is created
+        imgList.ListImages.Add , "NoImage", LoadPicture((imgPath & "NoImage.png"))
+        
+        BuildImageList()
+        
+        CheckForData()
+        
+    End Sub
+    
+    Private Sub lvItems_MouseDown(Button As Integer, Shift As Integer, X As Single, Y As Single)
+        
+        ' Check if the right mouse button was pressed
+        Set itm = lvItems.HitTest(X, Y)
+        
+        SetEnableForItemActions(itm Is Nothing)
+        
+        If Button = vbRightButton Then
+            
+            If Not itm Is Nothing Then
+                Set lvItems.SelectedItem = itm
+            End If
+        
+            ' Display the menu at the current mouse position
+            Me.PopUpMenu mnuItem
+        
+        End If
+    End Sub
+    
+    Private Sub SetEnableForItemActions(enabledState As Boolean)
+        
+        btnAddItem.Enabled = enabledState
+        btnAddImage.Enabled = Not enabledState
+        btnDeleteItem.Enabled = Not enabledState
+        btnRenameItem.Enabled = Not enabledState
+        btnRemoveImage.Enabled = enabledState
+        
+        mnuAddItem.Enabled = btnAddItem.Enabled
+        mnuImage.Enabled = btnAddImage.Enabled
+        mnuRename.Enabled = btnRenameItem.Enabled
+        mnuDelete.Enabled = btnDeleteItem.Enabled
+        mnuRemoveImage.Enabled = btnRemoveImage.Enabled
+        
+        If Not itm Is Nothing Then
+            ' an item is selected
+            
+            If itm.Icon <> "NoImage" Then
+                btnRemoveImage.Enabled = True
+                mnuRemoveImage.Enabled = btnRemoveImage.Enabled
+            End If
+        End If
+        
+    End Sub
+    
+    Private Sub mnuImage_Click()
+        
+        ' select an image for the item
+        Dim fileDL As New APIDialogs
+        Dim previousImage As String
+        
+        fileDL.DialogTitle = "Select image for item " & itm.Text
+        fileDL.Filter = "Image files (*.jpg;*.jpeg;*.png)|*.jpeg;*.jpg;*.png"
+        fileDL.MaxFileSize = 1024
+        
+        If fileDL.ShowOpen(Me.hWnd) Then
+            Dim ext As String
+            ext = LCase$(Mid$(fileDL.FileName, InStrRev(fileDL.FileName, ".")))
+            
+            If ext <> ".jpg" And ext <> ".png" And ext <> ".jpeg" Then
+                MsgBox "Not a valid image format.", vbExclamation
+                Exit Sub
+            End If
+            
+            If Not IsImageCorrectSize(fileDL.FullPath) Then
+                Exit Sub ' Stop here, the user already got the MsgBox
+            End If
+        
+            If CopyFileToDataFolder(fileDL.FullPath, fileDL.FileName) Then
+                UpdateItemFile(fileDL.FileName)
+            
+                AddToImageList(fileDL.FileName)
+                itm.Icon = Left(fileDL.FileName, InStrRev(fileDL.FileName, ".") - 1)  ' update the item with the image       
+                lvItems.Refresh()
+            End If
+                
+        Else
+            MsgBox("Nothing selected")
+        End If
+       
+        lvItems.Refresh()
+    End Sub
+    
+    Private Function IsImageCorrectSize(ByVal fullPath As String) As Boolean
+        
+        On Error Resume Next
+        Dim pic As StdPicture
+        Set pic = LoadPicture(fullPath)
+    
+        If Err.Number <> 0 Then
+            MsgBox "Unable to load image for dimension check.", vbCritical
+            IsImageCorrectSize = False
+            Exit Function
+        End If
+    
+        ' Convert HiMetric to Pixels
+        Dim w As Long, h As Long
+        w = ScaleX(pic.Width, vbHimetric, vbPixels)
+        h = ScaleY(pic.Height, vbHimetric, vbPixels)
+    
+        ' Check dimensions
+        If w <> 75 Or h <> 100 Then
+            MsgBox "Image size mismatch!" & vbCrLf & vbCrLf & _
+                   "Selected: " & w & "x" & h & " pixels" & vbCrLf & _
+                   "Required: 75x100 pixels" & vbCrLf & vbCrLf & _
+                   "Please resize the image and try again.", vbExclamation, "Invalid Dimensions"
+            IsImageCorrectSize = False
+        Else
+            IsImageCorrectSize = True
+        End If
+        
+    End Function
+    
+    Private Function CopyFileToDataFolder(imageFullPath As String, imageFileName As String) As Boolean
+        
+        On Error GoTo CopyFailed
+            FileCopy(imageFullPath, imgPath & imageFileName)
+        On Error GoTo 0
+        
+        Return True
+        Exit Function
+        
+        CopyFailed:
+        MsgBox "The selected file '" & imageFullPath & "' could not be copied. Select a different image." & vbCrLf & vbCrLf & _
+            "Error " & Err.Number & ": " & Err.Description, vbCritical, "File Error"
+        
+        Return False
+    End Function
+    
+    Private Sub BuildImageList()
+  
+        ' check the data folder for files to add to the listview
+        If Not fso.FolderExists(imgPath) Then
+            fso.CreateFolder(imgPath)
+            Exit Sub
+        End If
+        
+        Dim imgFile As String = Dir(imgPath & "*.*")
+        Dim imgName As String
+        
+        While imgFile > vbNullString
+            ' if the item uses an image other than the NoImage placeholder
+            If imgFile <> "NoImage.png" Then
+                imgName = fso.GetFileName(imgFile)
+                imgName = Left(imgName, InStr(imgName, ".") - 1)  ' remove the extention
+                imgList.ListImages.Add , imgName, LoadPicture((imgPath & imgFile))
+            End If
+            
+            imgFile = Dir()
+        Wend
+        
+    End Sub
+    
+    Private Sub CheckForData()
+        
+        ' check the data folder for files to add to the listview
+        If Not fso.FolderExists(dataPath) Then
+            fso.CreateFolder(dataPath)
+            Exit Sub
+        End If
+        
+        Dim itemFile As String = Dir(dataPath & "*.txt")
+        Dim itemImageName As String
+        
+        While itemFile > vbNullString
+            itemImageName = GetItemImageName(itemFile)
+            On Error Resume Next
+            lvItems.ListItems.Add lvItems.ListItems.Count, , Replace(itemFile, ".txt", ""), itemImageName
+            If Err <> 0 Then
+                MsgBox("The item file '" & itemFile & "' contained an image name that wasn't found in the image list. Skipping.")
+            End If
+            On Error GoTo 0
+            itemFile = Dir()
+        Wend
+        
+    End Sub
+    
+    Private Sub UpdateItemFile(imageFileName As String)
+        
+        ' for the selected item in the listview, write the image to display
+        Dim imageName As String
+        Dim itemFileName As String = dataPath & itm.Text & ".txt"
+        
+        With fso.CreateTextFile(itemFileName, True)
+            .WriteLine("Item ImageName: " & imageFileName)
+            .Close
+        End With
+        
+    End Sub
+    
+    Private Sub AddToImageList(imageFileName As String)
+        
+        Dim imageName As String
+        imageName = Mid(imageFileName, InStrRev(imageFileName, ".") - 1)
+        
+        imgList.ListImages.Add , imageName, LoadPicture((imgPath & imageFileName))
+    End Sub
+    
+    Private Function GetItemImageName(itemFileName As String) As String
+        
+        Dim imageName As String = "NoImage"
+        
+        On Error GoTo UsePlaceHolder
+        With fso.OpenTextFile(dataPath & itemFileName)
+            imageName = .ReadLine()
+            .Close
+        End With
+        
+        ' extract the image name from the text file
+        imageName = Mid(imageName, InStr(imageName, ":") + 2)
+        imageName = Left(imageName, InStrRev(imageName, ".") - 1)
+                
+        UsePlaceHolder:
+        On Error GoTo 0
+        Return imageName
+        
+    End Function
+    
+    Private Sub mnuAddItem_Click()
+        btnAddItem_Click
+    End Sub
+    
+    Private Sub mnuRename_Click()
+        btnRenameItem_Click
+    End Sub
+    
+    Private Sub btnRenameItem_Click()
+        
+        Dim newName As String
+        Dim currentName As String = itm.Text
+        
+        AskFornewName:
+        newName = InputBox("Enter the new name for the " & currentName & ":", "Rename Item")
+        
+        If Trim(newName) = "" Or newName = currentName Then Exit Sub
+        
+        If fso.FileExists(dataPath & newName & ".txt") Then
+            MsgBox("An item already exists with that name ('" & newName & "')", vbExclamation, "Unable to create item")
+            GoTo AskFornewName
+        End If
+        
+        ' apply the change of the name to the data file that contains the image info
+        Name dataPath & currentName & ".txt" As dataPath & newName & ".txt"
+        
+        itm.Text = newName
+        lvItems.Refresh()
+        
+    End Sub
+    
+    Private Sub btnDeleteItem_Click()
+        
+        Dim currentName As String = itm.Text
+        Dim currentIndex As Long = itm.Index
+        
+        If MsgBox("You have selected to delete the item '" & currentName & "'. Are you sure?", vbYesNo, "Delete Item") = vbNo Then Exit Sub
+        
+        On Error GoTo DeleteItemError
+            fso.DeleteFile(dataPath & currentName & ".txt")
+            
+            lvItems.ListItems.Remove(currentIndex)
+            
+            Set itm = Nothing
+        On Error GoTo 0
+        
+        lvItems.Refresh()
+        Exit Sub
+        
+        DeleteItemError:
+        MsgBox("An error was encountered attempting to delete '" & currentName & "'", vbCritical, "Unable to delete")
+        
+    End Sub
+    
+    Private Sub Delete_Click()
+        btnDeleteItem_Click
+    End Sub
+    
+    Private Sub btnAddImage_Click()
+        mnuImage_Click()
+    End Sub
+    
+    Private Sub btnRemoveImage_Click()
+        
+        If MsgBox("Removing the image will reset it no image. Are you sure?", vbYesNo, "Remove Image") = vbNo Then Exit Sub
+        
+        Dim imgFileName As String
+
+        With fso.OpenTextFile(dataPath & itm.Text & ".txt")
+            imgFileName = .ReadLine()
+            .Close
+        End With
+        
+        ' extract the image name from the item file
+        imgFileName = Mid(imgFileName, InStr(imgFileName, ":") + 2)
+        
+        fso.DeleteFile(imgPath & imgFileName) ' remove the image from the images folder
+        
+        ' overwrite the previous data file 
+        With fso.CreateTextFile(dataPath & itm.Text & ".txt", True)
+            .WriteLine("Item ImageName: NoImage")
+            .Close()
+        End With
+        
+        itm.Icon = "NoImage"
+        
+        lvItems.Refresh()
+    End Sub
+    
+    Private Sub mnuRemoveImage_Click()
+        btnRemoveImage_Click
+    End Sub
+
+End Class
